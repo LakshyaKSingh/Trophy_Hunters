@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Honeypot API Tester</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #0f172a;
+      color: #e5e7eb;
+      padding: 20px;
+    }
+    .container {
+      max-width: 700px;
+      margin: auto;
+      background: #020617;
+      padding: 20px;
+      border-radius: 8px;
+    }
+    textarea, input {
+      width: 100%;
+      margin-top: 10px;
+      padding: 10px;
+      background: #020617;
+      color: #e5e7eb;
+      border: 1px solid #334155;
+      border-radius: 4px;
+    }
+    button {
+      margin-top: 10px;
+      padding: 10px 16px;
+      background: #2563eb;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    pre {
+      background: #020617;
+      padding: 10px;
+      margin-top: 10px;
+      border: 1px solid #334155;
+      overflow-x: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>🪤 Honeypot API Testing UI</h2>
+
+    <label>Session ID</label>
+    <input id="sessionId" value="ui-test-session" />
+
+    <label>Scammer Message</label>
+    <textarea id="message">Send your UPI ID immediately or your account will be blocked.</textarea>
+
+    <button onclick="sendMessage()">Send Message</button>
+
+    <h3>API Response</h3>
+    <pre id="response">Waiting...</pre>
+  </div>
+
+  <script>
+    const API_KEY = "test-key-123";
+    const API_URL = "http://127.0.0.1:5000/honeypot";
+
+    let conversationHistory = [];
+
+    async function sendMessage() {
+      const sessionId = document.getElementById("sessionId").value;
+      const text = document.getElementById("message").value;
+
+      const payload = {
+        sessionId: sessionId,
+        message: {
+          sender: "scammer",
+          text: text,
+          timestamp: new Date().toISOString()
+        },
+        conversationHistory: conversationHistory
+      };
+
+      try {
+        const res = await fetch(API_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": API_KEY
+          },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await res.json();
+
+        let display = "API Response:\n" + JSON.stringify(data, null, 2);
+        if (!data.reply) {
+          display += "\n\nℹ️ No reply yet — system is observing.";
+        }
+
+        document.getElementById("response").textContent = display;
+
+        // Update history
+        conversationHistory.push({
+          sender: "scammer",
+          text: text,
+          timestamp: new Date().toISOString()
+        });
+
+        if (data.reply) {
+          conversationHistory.push({
+            sender: "user",
+            text: data.reply,
+            timestamp: new Date().toISOString()
+          });
+        }
+
+      } catch (err) {
+        document.getElementById("response").textContent = err.toString();
+      }
+    }
+  </script>
+</body>
+</html>
