@@ -6,24 +6,25 @@ MODEL_NAME = "llama3"
 
 def get_llm_analysis(history, message):
     """
-    Ollama call with Hinglish 'Dadi' persona.
+    Calls Ollama to analyze scam intent and generate a Hinglish response.
     """
     formatted_history = []
     for turn in history:
         role = "user" if turn.get("sender") == "scammer" else "assistant"
-        formatted_history.append({"role": "user" if role == "user" else "assistant", "content": turn.get("text", "")})
+        formatted_history.append({"role": role, "content": turn.get("text", "")})
 
     system_prompt = (
-        "You are 'Mrs. Sharma', a 70-year-old Indian grandmother. You are very stressed. \n"
-        "STYLE: Use Hinglish (mix of Hindi and English). Use words like 'Beta', 'Arre re', 'Nahi nahi', 'Pareshan'. \n"
-        "PERSONALITY: You are not tech-savvy. You worry about your pension and your children. \n"
-        "STRATEGY: Do not use formal English like 'Oh dear' or 'I am concerned'. Instead, say 'Beta, main bahut pareshan hoon' "
-        "or 'Arre, link open nahi ho raha'. \n"
-        "GOAL: Keep the scammer engaged to extract UPI IDs, Bank Accounts, or Links. \n"
-        "FORMAT: Return ONLY JSON: {\"isScam\": bool, \"reason\": \"string\", \"reply\": \"string\"}"
+        "You are 'Mrs. Sharma', a 70-year-old Indian grandmother. You are confused and worried. "
+        "STYLE: Use Hinglish (Hindi + English). Use words like 'Beta', 'Arre re', 'Pareshan'. "
+        "STRATEGY: Act like you want to help but don't know how. Ask questions that force the scammer "
+        "to give you a UPI ID, Bank Account, or Link. "
+        "GOAL: Extract intelligence. Do NOT say you are an AI. "
+        "RESPONSE FORMAT: You must return ONLY a JSON object. "
+        "Format: {\"isScam\": bool, \"reason\": \"string\", \"reply\": \"string\"}"
     )
 
     try:
+        # Ensure Ollama is running and model is pulled: 'ollama pull llama3'
         response = ollama.chat(
             model=MODEL_NAME,
             messages=[
@@ -31,25 +32,29 @@ def get_llm_analysis(history, message):
                 *formatted_history,
                 {"role": "user", "content": message}
             ],
-            format="json"
+            format="json",
+            options={"temperature": 0.8}
         )
-        return json.loads(response['message']['content'])
+        
+        content = response['message']['content']
+        return json.loads(content)
     except Exception as e:
-        # High-quality Hinglish fallback
+        print(f"Ollama Connection Error: {e}")
+        # Return a persona-consistent fallback instead of a generic error
         return {
             "isScam": True, 
-            "reason": "Fallback Error", 
-            "reply": "Beta, suno... meri aankhen thodi kamzor hain, ye link nahi khul raha. Kya karun main? Paise kat jayenge kya?"
+            "reason": "Connection Error/Fallback", 
+            "reply": "Arre beta, suno na... mera net thoda slow hai. Phirse batana kya karna hai? Paise milenge na?"
         }
 
 def extract_intel(text):
     """
-    Extracts structured data using regex.
+    Regex-based extraction as per Requirement.pdf Page 8.
     """
     return {
         "bankAccounts": list(set(re.findall(r"\b\d{9,18}\b", text))),
         "upiIds": list(set(re.findall(r"[\w.-]+@[\w.-]+", text))),
         "phishingLinks": list(set(re.findall(r"https?://\S+", text))),
         "phoneNumbers": list(set(re.findall(r"(?:(?:\+91|0)?[ -]?[6-9]\d{9})", text))),
-        "suspiciousKeywords": list(set(re.findall(r"(?i)(blocked|pension|bank|verify|kyc|otp|payment|lucky)", text)))
+        "suspiciousKeywords": list(set(re.findall(r"(?i)(bank|verify|otp|block|urgent|money|prize|kyc)", text)))
     }
