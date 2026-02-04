@@ -1,13 +1,17 @@
-from fastapi import FastAPI, Request, Header
+from fastapi import FastAPI, Request, Header, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import requests
+import json
 
 from agent import get_llm_analysis, extract_intel
 from nlp_gate import detect_scam_nlp
 
 app = FastAPI()
 
+# -------------------------------------------------
+# CORS
+# -------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,9 +26,9 @@ CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 sessions = {}
 
 # -------------------------------------------------
-# GUVI SAFE RESPONSE
+# GUVI-SAFE RESPONSE (single contract)
 # -------------------------------------------------
-def guvi_ok(reply):
+def guvi_ok(reply: str):
     return JSONResponse(
         status_code=200,
         content={
@@ -34,48 +38,55 @@ def guvi_ok(reply):
     )
 
 # -------------------------------------------------
-# ROOT
+# ROOT (HEAD SAFE)
 # -------------------------------------------------
-@app.api_route("/", methods=["GET", "POST", "OPTIONS"])
-async def root():
+@app.api_route("/", methods=["GET", "POST", "HEAD", "OPTIONS"])
+async def root(request: Request):
+    if request.method == "HEAD":
+        return Response(status_code=200)
+
     return guvi_ok(
         "Arre kya bol rahe ho? Account block ho jayega kya? Please thoda clearly batao."
     )
 
 # -------------------------------------------------
-# MESSAGE / HONEYPOT (NO BODY TOUCH)
+# MESSAGE / HONEYPOT (FULL LOGIC + HEAD SAFE)
 # -------------------------------------------------
-@app.api_route("/message", methods=["GET", "POST", "OPTIONS"])
-@app.api_route("/message/", methods=["GET", "POST", "OPTIONS"])
-@app.api_route("/honeypot", methods=["GET", "POST", "OPTIONS"])
-@app.api_route("/honeypot/", methods=["GET", "POST", "OPTIONS"])
+@app.api_route("/message", methods=["GET", "POST", "HEAD", "OPTIONS"])
+@app.api_route("/message/", methods=["GET", "POST", "HEAD", "OPTIONS"])
+@app.api_route("/honeypot", methods=["GET", "POST", "HEAD", "OPTIONS"])
+@app.api_route("/honeypot/", methods=["GET", "POST", "HEAD", "OPTIONS"])
 async def honeypot(request: Request, x_api_key: str = Header(None)):
     # -------------------------------------------------
-    # GUVI VALIDATION PHASE (ABSOLUTE NO BODY TOUCH)
+    # 1) HEAD probe (GUVI requirement)
     # -------------------------------------------------
-    content_length = request.headers.get("content-length")
+    if request.method == "HEAD":
+        return Response(status_code=200)
 
-    # GUVI sends POST with Content-Type but EMPTY BODY
-    if (
-        request.method == "POST"
-        and (content_length is None or content_length == "0")
-    ):
-        return guvi_ok("Thoda clearly batao na, kaunsa message aaya hai?")
-
-    # Non-POST or missing API key
-    if request.method != "POST" or x_api_key != API_KEY:
+    # -------------------------------------------------
+    # 2) GET probe (GUVI / health check)
+    # -------------------------------------------------
+    if request.method == "GET":
         return guvi_ok(
-            "Arre mujhe thoda confusion ho raha hai. Aap clearly bata sakte ho kya issue kya hai?"
+            "Arre mujhe thoda confusion ho raha hai. "
+            "Aap clearly bata sakte ho kya issue kya hai?"
         )
 
     # -------------------------------------------------
-    # REAL LOGIC (ONLY WHEN BODY IS PRESENT)
+    # 3) POST validation phase (empty body allowed)
+    # -------------------------------------------------
+    if x_api_key != API_KEY:
+        return guvi_ok(
+            "Arre mujhe thoda confusion ho raha hai. "
+            "Aap clearly bata sakte ho kya issue kya hai?"
+        )
+
+    # -------------------------------------------------
+    # 4) Safe body handling (NO request.json())
     # -------------------------------------------------
     payload = {}
     try:
-        import json
-        body_bytes = await request.receive()
-        body = body_bytes.get("body", b"")
+        body = await request.body()
         if body:
             payload = json.loads(body.decode("utf-8"))
             if not isinstance(payload, dict):
@@ -90,6 +101,9 @@ async def honeypot(request: Request, x_api_key: str = Header(None)):
     if not session_id or not msg_text:
         return guvi_ok("Thoda clearly batao na, kaunsa message aaya hai?")
 
+    # -------------------------------------------------
+    # 5) Session init
+    # -------------------------------------------------
     if session_id not in sessions:
         sessions[session_id] = {
             "intel": {
@@ -104,6 +118,9 @@ async def honeypot(request: Request, x_api_key: str = Header(None)):
             "callback_sent": False
         }
 
+    # -------------------------------------------------
+    # 6) NLP gate
+    # -------------------------------------------------
     nlp = detect_scam_nlp(msg_text)
     is_scam = nlp["scamDetected"]
 
@@ -112,24 +129,36 @@ async def honeypot(request: Request, x_api_key: str = Header(None)):
         "Account block ho jayega kya? Process kya hai?"
     )
 
+    # -------------------------------------------------
+    # 7) LLM best effort
+    # -------------------------------------------------
     if is_scam:
         llm = get_llm_analysis(history, msg_text)
         if isinstance(llm, dict) and llm.get("reply"):
             reply = llm["reply"]
 
+    # -------------------------------------------------
+    # 8) State + intelligence extraction
+    # -------------------------------------------------
     sessions[session_id]["msg_count"] += 1
     sessions[session_id]["detected"] |= is_scam
 
     new_intel = extract_intel(msg_text)
-    for k in sessions[session_id]["intel"]:
-        sessions[session_id]["intel"][k] = list(
-            set(sessions[session_id]["intel"][k] + new_intel[k])
-        )
+    found_critical = False
 
+    for k in sessions[session_id]["intel"]:
+        merged = list(set(sessions[session_id]["intel"][k] + new_intel[k]))
+        sessions[session_id]["intel"][k] = merged
+        if k in ("bankAccounts", "upiIds", "phishingLinks") and new_intel[k]:
+            found_critical = True
+
+    # -------------------------------------------------
+    # 9) Callback (original rule preserved)
+    # -------------------------------------------------
     if (
         sessions[session_id]["detected"]
         and not sessions[session_id]["callback_sent"]
-        and sessions[session_id]["msg_count"] >= 5
+        and (found_critical or sessions[session_id]["msg_count"] >= 5)
     ):
         try:
             requests.post(
@@ -149,12 +178,15 @@ async def honeypot(request: Request, x_api_key: str = Header(None)):
 
     return guvi_ok(reply)
 
+# -------------------------------------------------
+# FALLBACK (HEAD SAFE)
+# -------------------------------------------------
+@app.api_route("/{path:path}", methods=["GET", "POST", "HEAD", "OPTIONS"])
+async def fallback(path: str, request: Request):
+    if request.method == "HEAD":
+        return Response(status_code=200)
 
-# -------------------------------------------------
-# FALLBACK
-# -------------------------------------------------
-@app.api_route("/{path:path}", methods=["GET", "POST", "OPTIONS"])
-async def fallback(path: str):
     return guvi_ok(
-        "Arre mujhe thoda confusion ho raha hai. Aap clearly bata sakte ho kya issue kya hai?"
+        "Arre mujhe thoda confusion ho raha hai. "
+        "Aap clearly bata sakte ho kya issue kya hai?"
     )
