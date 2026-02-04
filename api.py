@@ -50,19 +50,33 @@ async def root():
 @app.api_route("/honeypot", methods=["GET", "POST", "OPTIONS"])
 @app.api_route("/honeypot/", methods=["GET", "POST", "OPTIONS"])
 async def honeypot(request: Request, x_api_key: str = Header(None)):
-    # ---- GUVI tester phase ----
-    # Never parse body here
+    # -------------------------------------------------
+    # GUVI VALIDATION PHASE (ABSOLUTE NO BODY TOUCH)
+    # -------------------------------------------------
+    content_length = request.headers.get("content-length")
+
+    # GUVI sends POST with Content-Type but EMPTY BODY
+    if (
+        request.method == "POST"
+        and (content_length is None or content_length == "0")
+    ):
+        return guvi_ok("Thoda clearly batao na, kaunsa message aaya hai?")
+
+    # Non-POST or missing API key
     if request.method != "POST" or x_api_key != API_KEY:
         return guvi_ok(
             "Arre mujhe thoda confusion ho raha hai. Aap clearly bata sakte ho kya issue kya hai?"
         )
 
-    # ---- SAFE body access (non-blocking) ----
+    # -------------------------------------------------
+    # REAL LOGIC (ONLY WHEN BODY IS PRESENT)
+    # -------------------------------------------------
     payload = {}
     try:
-        body = await request.body()
+        import json
+        body_bytes = await request.receive()
+        body = body_bytes.get("body", b"")
         if body:
-            import json
             payload = json.loads(body.decode("utf-8"))
             if not isinstance(payload, dict):
                 payload = {}
@@ -134,6 +148,7 @@ async def honeypot(request: Request, x_api_key: str = Header(None)):
             pass
 
     return guvi_ok(reply)
+
 
 # -------------------------------------------------
 # FALLBACK
