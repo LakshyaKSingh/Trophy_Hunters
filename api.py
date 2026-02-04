@@ -50,13 +50,14 @@ async def root(request: Request):
     )
 
 # -------------------------------------------------
-# MESSAGE / HONEYPOT (FULL LOGIC + HEAD SAFE)
+# MESSAGE / HONEYPOT
 # -------------------------------------------------
 @app.api_route("/message", methods=["GET", "POST", "HEAD", "OPTIONS"])
 @app.api_route("/message/", methods=["GET", "POST", "HEAD", "OPTIONS"])
 @app.api_route("/honeypot", methods=["GET", "POST", "HEAD", "OPTIONS"])
 @app.api_route("/honeypot/", methods=["GET", "POST", "HEAD", "OPTIONS"])
 async def honeypot(request: Request, x_api_key: str = Header(None)):
+
     # -------------------------------------------------
     # 1) HEAD probe (GUVI requirement)
     # -------------------------------------------------
@@ -64,7 +65,24 @@ async def honeypot(request: Request, x_api_key: str = Header(None)):
         return Response(status_code=200)
 
     # -------------------------------------------------
-    # 2) GET probe (GUVI / health check)
+    # 2) OPTIONS probe
+    # -------------------------------------------------
+    if request.method == "OPTIONS":
+        return Response(status_code=200)
+
+    # -------------------------------------------------
+    # 3) EMPTY POST BODY ACCEPTANCE (ROOT FIX)
+    # -------------------------------------------------
+    if request.method == "POST":
+        content_length = request.headers.get("content-length")
+        if content_length in (None, "0"):
+            return guvi_ok(
+                "Arre mujhe thoda confusion ho raha hai. "
+                "Aap clearly bata sakte ho kya issue kya hai?"
+            )
+
+    # -------------------------------------------------
+    # 4) GET probe
     # -------------------------------------------------
     if request.method == "GET":
         return guvi_ok(
@@ -73,7 +91,7 @@ async def honeypot(request: Request, x_api_key: str = Header(None)):
         )
 
     # -------------------------------------------------
-    # 3) POST validation phase (empty body allowed)
+    # 5) API key validation
     # -------------------------------------------------
     if x_api_key != API_KEY:
         return guvi_ok(
@@ -82,7 +100,7 @@ async def honeypot(request: Request, x_api_key: str = Header(None)):
         )
 
     # -------------------------------------------------
-    # 4) Safe body handling (NO request.json())
+    # 6) Safe body handling
     # -------------------------------------------------
     payload = {}
     try:
@@ -102,7 +120,7 @@ async def honeypot(request: Request, x_api_key: str = Header(None)):
         return guvi_ok("Thoda clearly batao na, kaunsa message aaya hai?")
 
     # -------------------------------------------------
-    # 5) Session init
+    # 7) Session init
     # -------------------------------------------------
     if session_id not in sessions:
         sessions[session_id] = {
@@ -119,7 +137,7 @@ async def honeypot(request: Request, x_api_key: str = Header(None)):
         }
 
     # -------------------------------------------------
-    # 6) NLP gate
+    # 8) NLP gate
     # -------------------------------------------------
     nlp = detect_scam_nlp(msg_text)
     is_scam = nlp["scamDetected"]
@@ -130,7 +148,7 @@ async def honeypot(request: Request, x_api_key: str = Header(None)):
     )
 
     # -------------------------------------------------
-    # 7) LLM best effort
+    # 9) LLM best effort
     # -------------------------------------------------
     if is_scam:
         llm = get_llm_analysis(history, msg_text)
@@ -138,7 +156,7 @@ async def honeypot(request: Request, x_api_key: str = Header(None)):
             reply = llm["reply"]
 
     # -------------------------------------------------
-    # 8) State + intelligence extraction
+    # 10) State + intel
     # -------------------------------------------------
     sessions[session_id]["msg_count"] += 1
     sessions[session_id]["detected"] |= is_scam
@@ -153,7 +171,7 @@ async def honeypot(request: Request, x_api_key: str = Header(None)):
             found_critical = True
 
     # -------------------------------------------------
-    # 9) Callback (original rule preserved)
+    # 11) Callback
     # -------------------------------------------------
     if (
         sessions[session_id]["detected"]
