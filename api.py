@@ -8,9 +8,6 @@ from nlp_gate import detect_scam_nlp
 
 app = FastAPI()
 
-# -------------------------------------------------
-# CORS
-# -------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,7 +22,7 @@ CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 sessions = {}
 
 # -------------------------------------------------
-# GUVI-SAFE RESPONSE
+# GUVI SAFE RESPONSE
 # -------------------------------------------------
 def guvi_ok(reply):
     return JSONResponse(
@@ -46,23 +43,29 @@ async def root():
     )
 
 # -------------------------------------------------
-# CORE HANDLER (USED BY /honeypot AND /message)
+# MESSAGE / HONEYPOT (NO BODY TOUCH)
 # -------------------------------------------------
-async def handle_message(request: Request, x_api_key: str | None):
-    if request.method != "POST":
+@app.api_route("/message", methods=["GET", "POST", "OPTIONS"])
+@app.api_route("/message/", methods=["GET", "POST", "OPTIONS"])
+@app.api_route("/honeypot", methods=["GET", "POST", "OPTIONS"])
+@app.api_route("/honeypot/", methods=["GET", "POST", "OPTIONS"])
+async def honeypot(request: Request, x_api_key: str = Header(None)):
+    # ---- GUVI tester phase ----
+    # Never parse body here
+    if request.method != "POST" or x_api_key != API_KEY:
         return guvi_ok(
             "Arre mujhe thoda confusion ho raha hai. Aap clearly bata sakte ho kya issue kya hai?"
         )
 
-    if x_api_key != API_KEY:
-        return guvi_ok(
-            "Arre mujhe thoda confusion ho raha hai. Aap clearly bata sakte ho kya issue kya hai?"
-        )
-
+    # ---- SAFE body access (non-blocking) ----
+    payload = {}
     try:
-        payload = await request.json()
-        if not isinstance(payload, dict):
-            payload = {}
+        body = await request.body()
+        if body:
+            import json
+            payload = json.loads(body.decode("utf-8"))
+            if not isinstance(payload, dict):
+                payload = {}
     except Exception:
         payload = {}
 
@@ -131,22 +134,6 @@ async def handle_message(request: Request, x_api_key: str | None):
             pass
 
     return guvi_ok(reply)
-
-# -------------------------------------------------
-# HONEYPOT (BACKWARD COMPAT)
-# -------------------------------------------------
-@app.api_route("/honeypot", methods=["GET", "POST", "OPTIONS"])
-@app.api_route("/honeypot/", methods=["GET", "POST", "OPTIONS"])
-async def honeypot(request: Request, x_api_key: str = Header(None)):
-    return await handle_message(request, x_api_key)
-
-# -------------------------------------------------
-# MESSAGE (GUVI EXPECTED ENDPOINT)
-# -------------------------------------------------
-@app.api_route("/message", methods=["GET", "POST", "OPTIONS"])
-@app.api_route("/message/", methods=["GET", "POST", "OPTIONS"])
-async def message(request: Request, x_api_key: str = Header(None)):
-    return await handle_message(request, x_api_key)
 
 # -------------------------------------------------
 # FALLBACK
